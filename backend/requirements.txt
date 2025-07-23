@@ -1,0 +1,3 @@
+# Python package dependencies for the backend of the Asana-MCP server.
+fastapi
+pydantic
