@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..logging import logger
+from .token_store import StoredToken, TokenStore
 
 class AsanaTokenResponse(BaseModel):
     access_token: str
@@ -13,9 +14,6 @@ class AsanaTokenResponse(BaseModel):
     refresh_token: str
 
 async def exchange_code_for_token(code: str) -> AsanaTokenResponse:
-    """
-    Exchange the OAuth `code` from Asana for an access + refresh token pair.
-    """
     token_url = "https://app.asana.com/-/oauth_token"
     payload = {
         "grant_type": "authorization_code",
@@ -26,11 +24,22 @@ async def exchange_code_for_token(code: str) -> AsanaTokenResponse:
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(token_url, data=payload)
-    try:
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        logger.error("OAuth token exchange failed: %s → %s", resp.status_code, resp.text)
-        raise
+    resp.raise_for_status()
 
     data = resp.json()
     return AsanaTokenResponse(**data)
+
+async def handle_oauth_callback(code: str) -> AsanaTokenResponse:
+    """
+    Exchange code → token, then persist it.
+    """
+    token = await exchange_code_for_token(code)
+    # Persist only the fields we care about
+    store_model = StoredToken(
+        access_token=token.access_token,
+        refresh_token=token.refresh_token,
+        expires_in=token.expires_in,
+    )
+    TokenStore.save(store_model)
+    logger.info("Saved Asana OAuth tokens to disk")
+    return token
