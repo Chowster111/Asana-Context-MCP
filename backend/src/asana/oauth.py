@@ -5,7 +5,6 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..logging import logger
-from .token_store import StoredToken, TokenStore
 
 class AsanaTokenResponse(BaseModel):
     access_token: str
@@ -24,22 +23,31 @@ async def exchange_code_for_token(code: str) -> AsanaTokenResponse:
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(token_url, data=payload)
-    resp.raise_for_status()
+        resp.raise_for_status()
+    return AsanaTokenResponse(**resp.json())
 
-    data = resp.json()
-    return AsanaTokenResponse(**data)
+async def refresh_access_token(refresh_token: str) -> AsanaTokenResponse:
+    """
+    Use the Asana refresh_token to get a new access + refresh pair.
+    """
+    token_url = "https://app.asana.com/-/oauth_token"
+    payload = {
+        "grant_type": "refresh_token",
+        "client_id": settings.ASANA_CLIENT_ID,
+        "client_secret": settings.ASANA_CLIENT_SECRET,
+        "refresh_token": refresh_token,
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(token_url, data=payload)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.error("Refresh token exchange failed: %s → %s", resp.status_code, resp.text)
+            raise
+    logger.info("Successfully refreshed access token")
+    return AsanaTokenResponse(**resp.json())
 
 async def handle_oauth_callback(code: str) -> AsanaTokenResponse:
-    """
-    Exchange code → token, then persist it.
-    """
     token = await exchange_code_for_token(code)
-    # Persist only the fields we care about
-    store_model = StoredToken(
-        access_token=token.access_token,
-        refresh_token=token.refresh_token,
-        expires_in=token.expires_in,
-    )
-    TokenStore.save(store_model)
-    logger.info("Saved Asana OAuth tokens to disk")
+    # persisted elsewhere using TokenStore.save()
     return token
